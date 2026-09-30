@@ -1,3 +1,40 @@
+# Patch mmcv-lite: stub mmcv._ext so mmpose can import without compiled CUDA ops
+import importlib, importlib.machinery, types, sys
+
+class _StubExt(types.ModuleType):
+    """Mock module that responds to any attribute access with a no-op function."""
+    def __init__(self, name):
+        super().__init__(name)
+        self.__file__ = '<mmcv_lite_stub>'
+        self.__loader__ = importlib.machinery.SourceFileLoader(name, '<mmcv_lite_stub>')
+        self.__spec__ = importlib.machinery.ModuleSpec(name, self.__loader__)
+        self.__package__ = 'mmcv'
+
+    def __getattr__(self, name):
+        if name.startswith('_'):
+            raise AttributeError(name)
+        def _stub(*args, **kwargs):
+            raise NotImplementedError(f"mmcv._ext.{name} requires full mmcv with CUDA ops")
+        return _stub
+
+_orig_import = importlib.import_module
+def _patched_import(name, *args, **kwargs):
+    if name == 'mmcv._ext':
+        if name not in sys.modules:
+            sys.modules[name] = _StubExt(name)
+        return sys.modules[name]
+    return _orig_import(name, *args, **kwargs)
+importlib.import_module = _patched_import
+
+# Patch torch.load for PyTorch 2.6+ (default weights_only=True breaks legacy checkpoints)
+import torch
+_orig_torch_load = torch.load
+def _patched_torch_load(*args, **kwargs):
+    if 'weights_only' not in kwargs:
+        kwargs['weights_only'] = False
+    return _orig_torch_load(*args, **kwargs)
+torch.load = _patched_torch_load
+
 import os
 import time
 import pdb
@@ -26,7 +63,10 @@ import shutil
 import gdown
 import imageio
 import ffmpeg
-from moviepy.editor import *
+try:
+    from moviepy.editor import *
+except ImportError:
+    from moviepy import *
 from transformers import WhisperModel
 
 ProjectDir = os.path.abspath(os.path.dirname(__file__))
